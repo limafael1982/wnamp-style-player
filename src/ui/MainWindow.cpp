@@ -2,6 +2,7 @@
 
 #include "playlist/PlaylistIo.h"
 #include "ui/SkinBrowser.h"
+#include "net/SomaFm.h"
 
 #include <commdlg.h>
 #include <shellapi.h>
@@ -162,6 +163,9 @@ bool MainWindow::create(HINSTANCE hinst) {
     } else {
         plWin_.reset();
     }
+    radioMenu_ = std::make_unique<RadioMenu>(
+        [this](std::function<void()> work, std::function<void()> done) { runAsync(std::move(work), std::move(done)); },
+        [this](const std::wstring& url, const std::wstring& title) { playUrl(url, title); });
     engine_.setNotifyWindow(hwnd_);
     engine_.setVolume(volume_);
     engine_.setBalance(balance_);
@@ -1016,68 +1020,10 @@ void MainWindow::playUrl(const std::wstring& url, const std::wstring& title) {
     playIndex(int(idx));
 }
 
-void MainWindow::playRadio(const net::RadioChannel& ch) {
-    const std::wstring pls = ch.playlistUrl, title = L"SomaFM: " + ch.title;
-    auto stream = std::make_shared<std::wstring>();
-    runAsync([pls, stream] { if (!net::resolveStreamUrl(pls, *stream)) stream->clear(); },
-             [this, stream, title] {
-                 if (stream->empty()) { MessageBoxW(hwnd_, L"Could not resolve the radio stream.", L"SomaFM", MB_OK | MB_ICONWARNING); return; }
-                 playUrl(*stream, title);
-             });
-}
-
-namespace {
-struct BuiltinStation { const wchar_t* title; const wchar_t* url; };
-// Stations with a fixed public stream URL (resolved/redirected by the server).
-const BuiltinStation kStations[] = {
-    {L"Jumbo Radio", L"https://backend.airplays.fm/api/v1/radio_stations/17/stream_proxy"},
-};
-constexpr UINT kRadioLoad = 800, kRadioBuiltin = 900, kRadioSoma = 1000;
-}  // namespace
-
 void MainWindow::showRadioMenu() {
-    HMENU m = CreatePopupMenu();
-    if (!m) return;
-    for (size_t i = 0; i < sizeof(kStations) / sizeof(kStations[0]); ++i)
-        AppendMenuW(m, MF_STRING, UINT(kRadioBuiltin + i), kStations[i].title);
-    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    HMENU soma = nullptr;
-    if (radio_.empty()) {
-        AppendMenuW(m, MF_STRING, kRadioLoad, radioLoading_ ? L"SomaFM (loading...)" : L"SomaFM: load channel list...");
-    } else {
-        soma = CreatePopupMenu();
-        for (size_t i = 0; i < radio_.size(); ++i) {
-            std::wstring label = radio_[i].title;
-            if (!radio_[i].genre.empty()) label += L"  (" + radio_[i].genre + L")";
-            for (size_t k = label.find(L'&'); k != std::wstring::npos; k = label.find(L'&', k + 2)) label.insert(k, 1, L'&');
-            AppendMenuW(soma, MF_STRING | ((i && i % 25 == 0) ? MF_MENUBARBREAK : 0), UINT(kRadioSoma + i), label.c_str());
-        }
-        AppendMenuW(m, MF_POPUP, reinterpret_cast<UINT_PTR>(soma), L"SomaFM");
-    }
     RECT rc;
     GetWindowRect(hwnd_, &rc);
-    SetForegroundWindow(hwnd_);
-    const UINT cmd = static_cast<UINT>(TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                                                     rc.left + 6 * scale_, rc.top + 12 * scale_, 0, hwnd_, nullptr));
-    DestroyMenu(m);  // also destroys the attached submenu
-    PostMessageW(hwnd_, WM_NULL, 0, 0);
-    if (cmd == kRadioLoad) {
-        if (radioLoading_) return;
-        radioLoading_ = true;
-        auto list = std::make_shared<std::vector<net::RadioChannel>>();
-        runAsync([list] { if (!net::fetchSomaChannels(*list)) list->clear(); },
-                 [this, list] {
-                     radioLoading_ = false;
-                     if (list->empty()) { MessageBoxW(hwnd_, L"Could not load the SomaFM channel list (network?).", L"SomaFM", MB_OK | MB_ICONWARNING); return; }
-                     radio_ = std::move(*list);
-                     showRadioMenu();
-                 });
-    } else if (cmd >= kRadioSoma && cmd - kRadioSoma < radio_.size()) {
-        playRadio(radio_[cmd - kRadioSoma]);
-    } else if (cmd >= kRadioBuiltin && cmd - kRadioBuiltin < sizeof(kStations) / sizeof(kStations[0])) {
-        const BuiltinStation& st = kStations[cmd - kRadioBuiltin];
-        playUrl(st.url, st.title);
-    }
+    radioMenu_->show(hwnd_, rc.left + 6 * scale_, rc.top + 12 * scale_);
 }
 
 bool MainWindow::onKey(WPARAM vk, bool alt) {

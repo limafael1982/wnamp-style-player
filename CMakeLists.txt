@@ -78,6 +78,10 @@ add_executable(wnamp WIN32
   src/net/Http.cpp
   src/net/SomaFm.h
   src/net/SomaFm.cpp
+  src/radio/Station.h
+  src/radio/Stations.h
+  src/radio/RadioMenu.h
+  src/radio/RadioMenu.cpp
   resources/app.manifest
   resources/app.rc)
 

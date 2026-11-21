@@ -8,7 +8,7 @@
 #include <functional>
 
 #include "audio/IEngine.h"
-#include "net/SomaFm.h"
+#include "radio/RadioMenu.h"
 #include "playlist/Playlist.h"
 #include "settings/Settings.h"
 #include "ui/EqWindow.h"
@@ -88,7 +88,6 @@ private:
     void showRadioMenu();
     void runAsync(std::function<void()> work, std::function<void()> done);
     void playUrl(const std::wstring& url, const std::wstring& title);
-    void playRadio(const net::RadioChannel& ch);
     void openSkinBrowser();
     void setVolumeUi(float v);
     bool onKey(WPARAM vk, bool alt);
@@ -110,8 +109,7 @@ private:
     void drawTime();
     void drawStateIndicator();
 
-    std::vector<net::RadioChannel> radio_;
-    bool radioLoading_ = false;
+    std::unique_ptr<RadioMenu> radioMenu_;
     IEngine& engine_;
     HWND hwnd_ = nullptr;
     std::shared_ptr<Skin> skin_;
