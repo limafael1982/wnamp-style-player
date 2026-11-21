@@ -165,7 +165,13 @@ bool MainWindow::create(HINSTANCE hinst) {
     }
     radioMenu_ = std::make_unique<RadioMenu>(
         [this](std::function<void()> work, std::function<void()> done) { runAsync(std::move(work), std::move(done)); },
-        [this](const std::wstring& url, const std::wstring& title) { playUrl(url, title); });
+        [this](const std::wstring& url, const std::wstring& title) { playUrl(url, title); },
+        [this](HWND owner, int& x, int& y) {
+            RECT rc;
+            GetWindowRect(owner, &rc);
+            x = rc.left + 6 * scale_;
+            y = rc.top + 12 * scale_;
+        });
     engine_.setNotifyWindow(hwnd_);
     engine_.setVolume(volume_);
     engine_.setBalance(balance_);
@@ -1021,9 +1027,7 @@ void MainWindow::playUrl(const std::wstring& url, const std::wstring& title) {
 }
 
 void MainWindow::showRadioMenu() {
-    RECT rc;
-    GetWindowRect(hwnd_, &rc);
-    radioMenu_->show(hwnd_, rc.left + 6 * scale_, rc.top + 12 * scale_);
+    radioMenu_->show(hwnd_);
 }
 
 bool MainWindow::onKey(WPARAM vk, bool alt) {

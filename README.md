@@ -21,8 +21,8 @@ references for sprite layout/behavior — no code was copied from either.
   reordering
 - 10-band equalizer window with presets and a response curve
 - Spectrum analyzer and position/volume/balance sliders synced to actual playback
-- Internet radio: SomaFM channel browser, plus any direct stream URL (paste one from the
-  clipboard)
+- Internet radio: built-in stations (Jumbo Radio, Tempo FM), a SomaFM channel browser,
+  and any direct stream URL (paste one from the clipboard)
 - Skin browser for switching skins without restarting
 - Persistent settings (last skin, volume, EQ, window position) in `%APPDATA%\wnamp`
 
@@ -55,6 +55,7 @@ miniz is fetched automatically via CMake `FetchContent` on first configure (need
 - `src/ui/` — the layered main window, equalizer, playlist, and skin browser windows.
 - `src/playlist/` — playlist model and `.m3u`/`.m3u8`/`.pls` I/O.
 - `src/net/` — a small WinHTTP client and the SomaFM channel-list/stream-resolution code.
+- `src/radio/` — built-in stations (`Stations.h`) and the "Radio..." popup menu (`RadioMenu`).
 - `src/settings/` — persistent settings.
 - `tools/make_default_skin.py` — generates the original default skin shipped in `data/`.
 

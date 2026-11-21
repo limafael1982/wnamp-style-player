@@ -10,13 +10,11 @@ constexpr UINT kCmdBuiltinBase = 900;
 constexpr UINT kCmdSomaBase = 1000;
 }  // namespace
 
-RadioMenu::RadioMenu(RunAsync runAsync, OnSelect onSelect)
-    : runAsync_(std::move(runAsync)), onSelect_(std::move(onSelect)) {}
+RadioMenu::RadioMenu(RunAsync runAsync, OnSelect onSelect, Anchor anchor)
+    : runAsync_(std::move(runAsync)), onSelect_(std::move(onSelect)), anchor_(std::move(anchor)) {}
 
-void RadioMenu::show(HWND owner, int x, int y) {
+void RadioMenu::show(HWND owner) {
     lastOwner_ = owner;
-    lastX_ = x;
-    lastY_ = y;
     const auto& builtins = radio::builtinStations();
 
     HMENU menu = CreatePopupMenu();
@@ -42,16 +40,18 @@ void RadioMenu::show(HWND owner, int x, int y) {
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(soma), L"SomaFM");
     }
 
+    int x = 0, y = 0;
+    anchor_(owner, x, y);
     SetForegroundWindow(owner);
     const UINT cmd = static_cast<UINT>(
         TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, x, y, 0, owner, nullptr));
     DestroyMenu(menu);  // also destroys the attached SomaFM submenu
     PostMessageW(owner, WM_NULL, 0, 0);
 
-    onCommand(owner, cmd);
+    onCommand(cmd);
 }
 
-void RadioMenu::onCommand(HWND owner, UINT cmd) {
+void RadioMenu::onCommand(UINT cmd) {
     const auto& builtins = radio::builtinStations();
     if (cmd == kCmdSomaLoad) {
         loadSomaChannels();
@@ -76,7 +76,7 @@ void RadioMenu::loadSomaChannels() {
                       return;
                   }
                   somaChannels_ = std::move(*list);
-                  show(lastOwner_, lastX_, lastY_);  // channel list just arrived: reopen with it populated
+                  show(lastOwner_);  // channel list just arrived: reopen, re-anchored to the window's current spot
               });
 }
 
