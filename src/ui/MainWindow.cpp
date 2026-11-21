@@ -1,6 +1,8 @@
 #include "ui/MainWindow.h"
 
 #include "playlist/PlaylistIo.h"
+#include "radio/Stations.h"
+#include "ui/SettingsWindow.h"
 #include "ui/SkinBrowser.h"
 #include "net/SomaFm.h"
 
@@ -18,6 +20,7 @@
 namespace {
 constexpr wchar_t kClassName[] = L"WnampStyleMainWindow";
 constexpr UINT kMsgNet = WM_APP + 2;  // lParam: heap std::function<void()>* run on the UI thread
+constexpr UINT kMsgTrayIcon = WM_APP + 3;  // lParam low word: the mouse message over the tray icon
 constexpr UINT_PTR kTimerId = 1;
 
 constexpr UINT_PTR kRenderTimerId = 2;   // render coalescing cooldown
@@ -811,6 +814,16 @@ LRESULT MainWindow::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             onEngineEvent(static_cast<EngineEvent>(w));
             render();
             return 0;
+        case kMsgTrayIcon:
+            if (LOWORD(l) == WM_LBUTTONUP || LOWORD(l) == WM_LBUTTONDBLCLK) {
+                ShowWindow(h, SW_RESTORE);
+                SetForegroundWindow(h);
+                if (eqOn_ && eqWin_) ShowWindow(eqWin_->hwnd(), SW_SHOW);
+                if (plOn_ && plWin_) ShowWindow(plWin_->hwnd(), SW_SHOW);
+            } else if (LOWORD(l) == WM_RBUTTONUP) {
+                showTrayContextMenu();
+            }
+            return 0;
         case WM_ERASEBKGND:
             return 1;
         case WM_PAINT: {
@@ -819,7 +832,19 @@ LRESULT MainWindow::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             EndPaint(h, &ps);
             return 0;
         }
+        case WM_CLOSE:
+            // "Keep running in the background" only hides the window if there is a tray icon
+            // to bring it back from — otherwise closing would leave no way to reach it again.
+            if (settings_ && settings_->data.keepRunningInBackground && trayIconActive_) {
+                ShowWindow(h, SW_HIDE);
+                if (eqWin_ && eqOn_) ShowWindow(eqWin_->hwnd(), SW_HIDE);
+                if (plWin_ && plOn_) ShowWindow(plWin_->hwnd(), SW_HIDE);
+                return 0;
+            }
+            DestroyWindow(h);
+            return 0;
         case WM_DESTROY:
+            if (trayIconActive_) { Shell_NotifyIconW(NIM_DELETE, &trayIcon_); trayIconActive_ = false; }
             saveSettings();
             KillTimer(h, kVisTimerId);
             KillTimer(h, kTimerId);
@@ -877,6 +902,8 @@ void MainWindow::applySettings() {
     if (eqWin_) eqWin_->setState(d.eqBands, d.eqPreamp, d.eqEnabled);
     startEqVisible_ = d.eqVisible;
     startPlVisible_ = d.plVisible;
+    if (radioMenu_) radioMenu_->setStations(d.customStations);
+    updateTrayIcon();
 
     std::vector<std::wstring> saved;
     if (loadPlaylistFile(Settings::playlistPath(), saved)) playlist_.addMany(saved);
@@ -945,6 +972,80 @@ void MainWindow::openSkinBrowser() {
     });
 }
 
+void MainWindow::openSettingsWindow() {
+    SettingsWindow::Callbacks cb;
+    cb.currentSkinName = [this] {
+        const size_t slash = skinPath_.find_last_of(L"\\/");
+        return slash == std::wstring::npos ? skinPath_ : skinPath_.substr(slash + 1);
+    };
+    cb.openSkinBrowser = [this] { openSkinBrowser(); };
+    cb.getShowTrayIcon = [this] { return settings_->data.showTrayIcon; };
+    cb.setShowTrayIcon = [this](bool on) { settings_->data.showTrayIcon = on; updateTrayIcon(); };
+    cb.getKeepRunningInBackground = [this] { return settings_->data.keepRunningInBackground; };
+    cb.setKeepRunningInBackground = [this](bool on) { settings_->data.keepRunningInBackground = on; };
+    cb.getStations = [this] { return settings_->data.customStations; };
+    cb.setStations = [this](const std::vector<radio::Station>& stations) {
+        settings_->data.customStations = stations;
+        if (radioMenu_) radioMenu_->setStations(stations);
+    };
+    SettingsWindow::show(hwnd_, hinst_, cb);
+}
+
+void MainWindow::updateTrayIcon() {
+    if (!hwnd_ || !settings_) return;
+    const bool wantIcon = settings_->data.showTrayIcon;
+    if (wantIcon && !trayIconActive_) {
+        trayIcon_ = NOTIFYICONDATAW{};
+        trayIcon_.cbSize = sizeof(trayIcon_);
+        trayIcon_.hWnd = hwnd_;
+        trayIcon_.uID = 1;
+        trayIcon_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        trayIcon_.uCallbackMessage = kMsgTrayIcon;
+        trayIcon_.hIcon = reinterpret_cast<HICON>(LoadImageW(hinst_, MAKEINTRESOURCEW(101),  // resources/app.rc: IDI_APPICON
+                                                              IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
+        wcscpy_s(trayIcon_.szTip, L"wnamp");
+        trayIconActive_ = Shell_NotifyIconW(NIM_ADD, &trayIcon_) != FALSE;
+    } else if (!wantIcon && trayIconActive_) {
+        Shell_NotifyIconW(NIM_DELETE, &trayIcon_);
+        trayIconActive_ = false;
+    }
+}
+
+void MainWindow::showTrayContextMenu() {
+    enum : UINT { kRestore = 1, kPlayPause, kTop, kExit };
+    HMENU m = CreatePopupMenu();
+    if (!m) return;
+    AppendMenuW(m, MF_STRING, kRestore, L"Open wnamp");
+    AppendMenuW(m, MF_STRING, kPlayPause, L"Play/Pause");
+    AppendMenuW(m, MF_STRING | (alwaysOnTop_ ? MF_CHECKED : 0), kTop, L"Always on top");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, kExit, L"Exit");
+
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(hwnd_);
+    const UINT cmd = static_cast<UINT>(TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_BOTTOMALIGN,
+                                                       pt.x, pt.y, 0, hwnd_, nullptr));
+    DestroyMenu(m);
+    PostMessageW(hwnd_, WM_NULL, 0, 0);
+    switch (cmd) {
+        case kRestore:
+            ShowWindow(hwnd_, SW_RESTORE);
+            SetForegroundWindow(hwnd_);
+            if (eqOn_ && eqWin_) ShowWindow(eqWin_->hwnd(), SW_SHOW);
+            if (plOn_ && plWin_) ShowWindow(plWin_->hwnd(), SW_SHOW);
+            break;
+        case kPlayPause: doPlay(); break;
+        case kTop:
+            alwaysOnTop_ = !alwaysOnTop_;
+            SetWindowPos(hwnd_, alwaysOnTop_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            break;
+        case kExit: DestroyWindow(hwnd_); break;
+        default: break;
+    }
+}
+
 void MainWindow::setVolumeUi(float v) {
     volume_ = clamp01(v);
     engine_.setVolume(volume_);
@@ -953,10 +1054,10 @@ void MainWindow::setVolumeUi(float v) {
 }
 
 void MainWindow::showMenu() {
-    enum : UINT { kSkins = 1, kOpen, kRadio, kClipUrl, kPlaylist, kEq, kTop, kExit };
+    enum : UINT { kSettings = 1, kOpen, kRadio, kClipUrl, kPlaylist, kEq, kTop, kExit };
     HMENU m = CreatePopupMenu();
     if (!m) return;
-    AppendMenuW(m, MF_STRING, kSkins, L"Skin Browser...\tAlt+S");
+    AppendMenuW(m, MF_STRING, kSettings, L"Settings...\tAlt+S");
     AppendMenuW(m, MF_STRING, kOpen, L"Play file...");
     AppendMenuW(m, MF_STRING, kRadio, L"Radio...");
     AppendMenuW(m, MF_STRING, kClipUrl, L"Play stream URL from clipboard");
@@ -975,7 +1076,7 @@ void MainWindow::showMenu() {
     DestroyMenu(m);
     PostMessageW(hwnd_, WM_NULL, 0, 0);
     switch (cmd) {
-        case kSkins:    openSkinBrowser(); break;
+        case kSettings: openSettingsWindow(); break;
         case kOpen:     activate(Ctl::Eject); break;
         case kRadio:    showRadioMenu(); break;
         case kClipUrl: {
@@ -1035,7 +1136,7 @@ bool MainWindow::onKey(WPARAM vk, bool alt) {
         switch (vk) {
             case 'E': togglePlaylist(); return true;
             case 'G': toggleEq(); return true;
-            case 'S': openSkinBrowser(); return true;
+            case 'S': openSettingsWindow(); return true;
             default: return false;
         }
     }

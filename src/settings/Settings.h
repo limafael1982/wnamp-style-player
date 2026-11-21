@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "radio/Stations.h"
+
 // Everything that is remembered between runs.
 struct SettingsData {
     std::wstring skinPath;
@@ -22,6 +24,13 @@ struct SettingsData {
     float eqPreamp = 0.0f;    // dB, -12..12
     float eqBands[10] = {};   // dB, -12..12
     std::wstring lastDir;     // last folder used in file dialogs
+
+    bool showTrayIcon = true;
+    bool keepRunningInBackground = false;
+    // User-editable radio station list. Seeded from the built-in defaults the first
+    // time settings.ini is written; after that, whatever the user saved (add/edit/
+    // remove, including an intentionally empty list) is kept as-is.
+    std::vector<radio::Station> customStations = radio::builtinStations();
 };
 
 // Stored as UTF-8 "key=value" lines in %APPDATA%\wnamp\settings.ini.

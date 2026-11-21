@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "net/SomaFm.h"
-#include "radio/Station.h"
+#include "radio/Stations.h"
 
 // Builds and drives the "Radio..." popup menu (built-in stations + an on-demand SomaFM
 // submenu) and turns the user's choice into a playable (url, title) pair.
@@ -34,6 +34,11 @@ public:
     // and owns the native popup.
     void show(HWND owner);
 
+    // Replaces the built-in station list (top section of the menu) with `stations`.
+    // Defaults to radio::builtinStations() until the caller (MainWindow, from the
+    // user's saved/edited list) calls this.
+    void setStations(std::vector<radio::Station> stations) { stations_ = std::move(stations); }
+
 private:
     void onCommand(UINT cmd);
     void loadSomaChannels();
@@ -43,6 +48,7 @@ private:
     RunAsync runAsync_;
     OnSelect onSelect_;
     Anchor anchor_;
+    std::vector<radio::Station> stations_ = radio::builtinStations();
     std::vector<net::RadioChannel> somaChannels_;
     bool somaLoading_ = false;
 };

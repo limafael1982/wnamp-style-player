@@ -2,8 +2,6 @@
 
 #include <memory>
 
-#include "radio/Stations.h"
-
 namespace {
 constexpr UINT kCmdSomaLoad = 800;
 constexpr UINT kCmdBuiltinBase = 900;
@@ -15,7 +13,7 @@ RadioMenu::RadioMenu(RunAsync runAsync, OnSelect onSelect, Anchor anchor)
 
 void RadioMenu::show(HWND owner) {
     lastOwner_ = owner;
-    const auto& builtins = radio::builtinStations();
+    const auto& builtins = stations_;
 
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
@@ -53,7 +51,7 @@ void RadioMenu::show(HWND owner) {
 }
 
 void RadioMenu::onCommand(UINT cmd) {
-    const auto& builtins = radio::builtinStations();
+    const auto& builtins = stations_;
     if (cmd == kCmdSomaLoad) {
         loadSomaChannels();
     } else if (cmd >= kCmdSomaBase && cmd - kCmdSomaBase < somaChannels_.size()) {

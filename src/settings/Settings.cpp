@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -237,6 +238,8 @@ bool Settings::load() {
 
     SettingsData loaded = data;
     bool gotX = false, gotY = false;
+    bool sawRadioCount = false;
+    std::vector<std::pair<std::wstring, std::wstring>> stationFields;  // (title, url) by index
     size_t pos = 0;
     while (pos <= text.size()) {
         size_t lineEnd = text.find('\n', pos);
@@ -273,10 +276,37 @@ bool Settings::load() {
         else if (key.size() == 3 && key.compare(0, 2, "eq") == 0 && key[2] >= '0' && key[2] <= '9') {
             if (parseFloat(val, floatVal)) loaded.eqBands[key[2] - '0'] = clampf(floatVal, -12.0f, 12.0f);
         }
+        else if (key == "showtrayicon") { if (parseBool(val, boolVal)) loaded.showTrayIcon = boolVal; }
+        else if (key == "keeprunningbackground") { if (parseBool(val, boolVal)) loaded.keepRunningInBackground = boolVal; }
+        else if (key == "radiocount") {
+            sawRadioCount = true;
+            if (parseInt(val, intVal)) stationFields.resize(static_cast<size_t>(std::max(0, intVal)));
+        }
+        else if (key.rfind("radio", 0) == 0 && key.size() > 5) {
+            // radio<N>name / radio<N>url
+            size_t digitsStart = 5;
+            size_t digitsEnd = digitsStart;
+            while (digitsEnd < key.size() && key[digitsEnd] >= '0' && key[digitsEnd] <= '9') ++digitsEnd;
+            if (digitsEnd > digitsStart) {
+                const int index = std::atoi(key.substr(digitsStart, digitsEnd - digitsStart).c_str());
+                const std::string field = key.substr(digitsEnd);
+                if (index >= 0) {
+                    if (static_cast<size_t>(index) >= stationFields.size())
+                        stationFields.resize(static_cast<size_t>(index) + 1);
+                    if (field == "name") stationFields[static_cast<size_t>(index)].first = toWide(val);
+                    else if (field == "url") stationFields[static_cast<size_t>(index)].second = toWide(val);
+                }
+            }
+        }
         // unknown keys are ignored
     }
 
     if (gotX && gotY) loaded.hasMainPos = positionLooksSane(loaded.mainX, loaded.mainY);
+    if (sawRadioCount) {
+        loaded.customStations.clear();
+        for (const auto& [title, url] : stationFields)
+            if (!title.empty() && !url.empty()) loaded.customStations.push_back(radio::Station{title, url});
+    }
     data = std::move(loaded);
     return true;
 }
@@ -315,6 +345,14 @@ bool Settings::save() const {
     for (int i = 0; i < 10; ++i) {
         const std::string key = "eq" + std::to_string(i);
         put(key.c_str(), fmtFloat(clampf(current.eqBands[i], -12.0f, 12.0f)));
+    }
+    putBool("showtrayicon", current.showTrayIcon);
+    putBool("keeprunningbackground", current.keepRunningInBackground);
+    put("radiocount", std::to_string(current.customStations.size()));
+    for (size_t i = 0; i < current.customStations.size(); ++i) {
+        const std::string base = "radio" + std::to_string(i);
+        put((base + "name").c_str(), toUtf8(current.customStations[i].title));
+        put((base + "url").c_str(), toUtf8(current.customStations[i].url));
     }
     return writeFileAtomic(joinPath(dir, L"settings.ini"), out);
 }

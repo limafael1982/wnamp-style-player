@@ -1,5 +1,7 @@
 #pragma once
 #include <windows.h>
+#include <shellapi.h>
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -86,6 +88,9 @@ private:
     void toggleEq();
     void showMenu();
     void showRadioMenu();
+    void openSettingsWindow();
+    void updateTrayIcon();
+    void showTrayContextMenu();
     void runAsync(std::function<void()> work, std::function<void()> done);
     void playUrl(const std::wstring& url, const std::wstring& title);
     void openSkinBrowser();
@@ -157,4 +162,7 @@ private:
     bool posDragging_ = false;
     float posDrag_ = 0.0f;   // 0..1 while dragging
     int posGrab_ = 0;        // pointer offset inside the thumb, skin px
+
+    NOTIFYICONDATAW trayIcon_{};
+    bool trayIconActive_ = false;
 };
