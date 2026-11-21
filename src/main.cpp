@@ -24,19 +24,19 @@ std::wstring pickSkin() {
     return GetOpenFileNameW(&ofn) ? std::wstring(buf) : std::wstring();
 }
 
-bool exists(const std::wstring& p) {
+bool exists(const std::wstring& path) {
     std::error_code ec;
-    return !p.empty() && std::filesystem::exists(p, ec);
+    return !path.empty() && std::filesystem::exists(path, ec);
 }
 
 // A command-line argument is a skin if it is a .wsz/.zip or a folder holding main.bmp.
-bool isSkinArg(const std::wstring& p) {
+bool isSkinArg(const std::wstring& path) {
     namespace fs = std::filesystem;
     std::error_code ec;
-    std::wstring ext = fs::path(p).extension().wstring();
-    for (auto& c : ext) c = static_cast<wchar_t>(towlower(c));
+    std::wstring ext = fs::path(path).extension().wstring();
+    for (auto& ch : ext) ch = static_cast<wchar_t>(towlower(ch));
     if (ext == L".wsz" || ext == L".zip") return true;
-    return fs::is_directory(p, ec) && fs::exists(fs::path(p) / L"main.bmp", ec);
+    return fs::is_directory(path, ec) && fs::exists(fs::path(path) / L"main.bmp", ec);
 }
 
 }  // namespace
@@ -74,8 +74,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     const std::wstring candidates[] = {skinArg, settings.data.skinPath, defaultSkin};
     bool loaded = false;
     std::wstring err;
-    for (const auto& c : candidates) {
-        if (exists(c) && win.loadSkin(c, err)) { loaded = true; break; }
+    for (const auto& candidate : candidates) {
+        if (exists(candidate) && win.loadSkin(candidate, err)) { loaded = true; break; }
     }
     if (!loaded) {
         const std::wstring chosen = pickSkin();

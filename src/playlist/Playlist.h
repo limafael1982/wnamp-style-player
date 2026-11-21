@@ -38,7 +38,7 @@ public:
     void reverse();
     // Moves every selected row one step up (delta<0) or down (delta>0). Updates `sel` to the new
     // positions and keeps current() on the same track. Returns false if the block is already at the edge.
-    bool moveSelected(std::set<int>& sel, int delta);
+    bool moveSelected(std::set<int>& selected, int delta);
     void randomize();
 
     std::vector<std::wstring> paths() const;

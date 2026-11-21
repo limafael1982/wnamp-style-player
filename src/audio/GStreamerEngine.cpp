@@ -16,24 +16,24 @@
 
 namespace {
 
-std::string toUtf8(const std::wstring& w) {
-    if (w.empty()) return {};
-    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
-    std::string s(size_t(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), s.data(), n, nullptr, nullptr);
-    return s;
+std::string toUtf8(const std::wstring& wide) {
+    if (wide.empty()) return {};
+    int byteLen = WideCharToMultiByte(CP_UTF8, 0, wide.data(), (int)wide.size(), nullptr, 0, nullptr, nullptr);
+    std::string utf8(size_t(byteLen), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), (int)wide.size(), utf8.data(), byteLen, nullptr, nullptr);
+    return utf8;
 }
 
 // Returns a newly allocated URI string (g_free) or nullptr.
-bool isRemote(const std::wstring& p) {
-    return p.find(L"://") != std::wstring::npos || p.rfind(L"spotify:", 0) == 0;
+bool isRemote(const std::wstring& path) {
+    return path.find(L"://") != std::wstring::npos || path.rfind(L"spotify:", 0) == 0;
 }
 
 gchar* uriFromPath(const std::wstring& path) {
-    const std::string u8 = toUtf8(path);
-    if (isRemote(path)) return g_strdup(u8.c_str());
+    const std::string utf8Path = toUtf8(path);
+    if (isRemote(path)) return g_strdup(utf8Path.c_str());
     GError* err = nullptr;
-    gchar* uri = gst_filename_to_uri(u8.c_str(), &err);
+    gchar* uri = gst_filename_to_uri(utf8Path.c_str(), &err);
     if (err) g_error_free(err);
     return uri;
 }
@@ -65,9 +65,20 @@ public:
             TRUE, &err);
         if (err) g_error_free(err);
         if (filter) {
-            eq_ = gst_bin_get_by_name(GST_BIN(filter), "eq");
-            pan_ = gst_bin_get_by_name(GST_BIN(filter), "pan");
+            equalizer_ = gst_bin_get_by_name(GST_BIN(filter), "eq");
+            panorama_ = gst_bin_get_by_name(GST_BIN(filter), "pan");
+            spectrumElement_ = gst_bin_get_by_name(GST_BIN(filter), "spec");
             g_object_set(playbin_, "audio-filter", filter, nullptr);
+        }
+        if (spectrumElement_) {
+            // The negotiated caps give the real sample rate for every source, local files
+            // included, and are the only way to learn it for a live radio stream (where
+            // discover() below deliberately skips the blocking GstDiscoverer probe).
+            if (GstPad* pad = gst_element_get_static_pad(spectrumElement_, "sink")) {
+                gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, &GStreamerEngine::onCapsProbe, this,
+                                   nullptr);
+                gst_object_unref(pad);
+            }
         }
 
         g_signal_connect(playbin_, "about-to-finish", G_CALLBACK(&GStreamerEngine::onAboutToFinish), this);
@@ -85,36 +96,37 @@ public:
     // Built from GStreamer's typefind factories, so it matches whatever plugins are installed.
     std::vector<std::wstring> supportedExtensions() const override {
         std::set<std::wstring> out;
-        GList* list = gst_type_find_factory_get_list();
-        for (GList* l = list; l; l = l->next) {
-            auto* f = GST_TYPE_FIND_FACTORY(l->data);
-            const gchar* const* exts = gst_type_find_factory_get_extensions(f);
+        GList* factories = gst_type_find_factory_get_list();
+        for (GList* node = factories; node; node = node->next) {
+            auto* factory = GST_TYPE_FIND_FACTORY(node->data);
+            const gchar* const* exts = gst_type_find_factory_get_extensions(factory);
             if (!exts) continue;
-            bool audio = false;
-            if (GstCaps* caps = gst_type_find_factory_get_caps(f)) {
+            bool isAudio = false;
+            if (GstCaps* caps = gst_type_find_factory_get_caps(factory)) {
                 for (guint i = 0; i < gst_caps_get_size(caps); ++i) {
-                    const gchar* n = gst_structure_get_name(gst_caps_get_structure(caps, i));
-                    if (!n) continue;
-                    if (g_str_has_prefix(n, "audio/") || g_str_has_prefix(n, "application/ogg") ||
-                        g_str_has_prefix(n, "application/x-id3") || g_str_has_prefix(n, "application/x-apetag") ||
-                        g_str_has_prefix(n, "video/x-ms-asf") || g_str_has_prefix(n, "video/x-matroska") ||
-                        g_str_has_prefix(n, "video/webm") || g_str_has_prefix(n, "video/quicktime"))
-                        audio = true;
+                    const gchar* mimeType = gst_structure_get_name(gst_caps_get_structure(caps, i));
+                    if (!mimeType) continue;
+                    if (g_str_has_prefix(mimeType, "audio/") || g_str_has_prefix(mimeType, "application/ogg") ||
+                        g_str_has_prefix(mimeType, "application/x-id3") ||
+                        g_str_has_prefix(mimeType, "application/x-apetag") ||
+                        g_str_has_prefix(mimeType, "video/x-ms-asf") || g_str_has_prefix(mimeType, "video/x-matroska") ||
+                        g_str_has_prefix(mimeType, "video/webm") || g_str_has_prefix(mimeType, "video/quicktime"))
+                        isAudio = true;
                 }
             }
-            if (!audio) continue;
+            if (!isAudio) continue;
             for (; *exts; ++exts) {
-                std::wstring e = L".";
-                for (const gchar* c = *exts; *c; ++c) e += static_cast<wchar_t>(g_ascii_tolower(*c));
-                out.insert(e);
+                std::wstring ext = L".";
+                for (const gchar* ch = *exts; *ch; ++ch) ext += static_cast<wchar_t>(g_ascii_tolower(*ch));
+                out.insert(ext);
             }
         }
-        gst_plugin_feature_list_free(list);
+        gst_plugin_feature_list_free(factories);
         return {out.begin(), out.end()};
     }
 
     TrackInfo trackInfo() const override {
-        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(mu_));
+        std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(infoMutex_));
         return info_;
     }
 
@@ -139,7 +151,7 @@ public:
     }
 
     void queueNext(const std::wstring& path) override {
-        std::lock_guard<std::mutex> lk(mu_);
+        std::lock_guard<std::mutex> lk(infoMutex_);
         nextUri_ = path.empty() ? std::string() : [&] {
             gchar* u = uriFromPath(path);
             std::string s = u ? u : "";
@@ -178,31 +190,31 @@ public:
         if (!bars || count <= 0) return 0;
         for (int i = 0; i < count; ++i) bars[i] = 0.0f;
         if (state_ != EngineState::Playing) return 0;
-        float mag[kSpecBands];
+        float mag[kSpectrumBands];
         {
-            // Frames are shown kSpecDelayUs after they arrive, which roughly matches the sink's buffering,
+            // Frames are shown kSpectrumDelayUs after they arrive, which roughly matches the sink's buffering,
             // so the bars follow what is audible. (Independent of pipeline clocks, which differ per source.)
             const gint64 now = g_get_monotonic_time();
-            std::lock_guard<std::mutex> lk(specMu_);
-            while (!specQ_.empty() && specQ_.front().arrived < now - 1000000) specQ_.pop_front();
+            std::lock_guard<std::mutex> lk(spectrumMutex_);
+            while (!spectrumQueue_.empty() && spectrumQueue_.front().arrived < now - 1000000) spectrumQueue_.pop_front();
             int pick = -1;
-            for (size_t i = 0; i < specQ_.size(); ++i)
-                if (specQ_[i].arrived <= now - kSpecDelayUs) pick = int(i);
+            for (size_t i = 0; i < spectrumQueue_.size(); ++i)
+                if (spectrumQueue_[i].arrived <= now - kSpectrumDelayUs) pick = int(i);
             if (pick < 0) return 0;
-            std::copy(std::begin(specQ_[size_t(pick)].mag), std::end(specQ_[size_t(pick)].mag), mag);
-            specQ_.erase(specQ_.begin(), specQ_.begin() + pick);
+            std::copy(std::begin(spectrumQueue_[size_t(pick)].mag), std::end(spectrumQueue_[size_t(pick)].mag), mag);
+            spectrumQueue_.erase(spectrumQueue_.begin(), spectrumQueue_.begin() + pick);
         }
         // Spectrum covers 0..Nyquist linearly in 64 bands; map log-spaced bars (~40 Hz..16 kHz).
-        const float nyquist = specRate_ > 0 ? float(specRate_) * 0.5f : 22050.0f;
+        const float nyquist = spectrumSampleRateHz_ > 0 ? float(spectrumSampleRateHz_) * 0.5f : 22050.0f;
         const float fLo = 40.0f, fHi = std::min(16000.0f, nyquist);
         const float ratio = fHi / fLo;
         for (int i = 0; i < count; ++i) {
             const float f0 = fLo * std::pow(ratio, float(i) / float(count));
             const float f1 = fLo * std::pow(ratio, float(i + 1) / float(count));
-            int b0 = int(f0 / nyquist * kSpecBands);
-            int b1 = int(f1 / nyquist * kSpecBands);
-            b0 = std::clamp(b0, 0, kSpecBands - 1);
-            b1 = std::clamp(b1, b0, kSpecBands - 1);
+            int b0 = int(f0 / nyquist * kSpectrumBands);
+            int b1 = int(f1 / nyquist * kSpectrumBands);
+            b0 = std::clamp(b0, 0, kSpectrumBands - 1);
+            b1 = std::clamp(b1, b0, kSpectrumBands - 1);
             float db = -80.0f;
             for (int k = b0; k <= b1; ++k) db = std::max(db, mag[k]);
             bars[i] = std::clamp((db + 80.0f) / 80.0f, 0.0f, 1.0f);
@@ -223,7 +235,7 @@ public:
     }
 
     void setVolume(float v) override { g_object_set(playbin_, "volume", double(std::clamp(v, 0.0f, 1.0f)), nullptr); }
-    void setBalance(float b) override { if (pan_) g_object_set(pan_, "panorama", gfloat(std::clamp(b, -1.0f, 1.0f)), nullptr); }
+    void setBalance(float b) override { if (panorama_) g_object_set(panorama_, "panorama", gfloat(std::clamp(b, -1.0f, 1.0f)), nullptr); }
     void setEqEnabled(bool on) override { eqOn_ = on; applyEq(); }
     void setEqPreamp(float db) override { preamp_ = db; applyEq(); }
     void setEqBand(int band, float db) override {
@@ -235,152 +247,199 @@ public:
 private:
     // Reads tags + stream info synchronously (GstDiscoverer, 2 s timeout).
     void discover(const gchar* uri, const std::wstring& path) {
-        TrackInfo ti;
+        TrackInfo result;
         if (isRemote(path)) {  // live streams: no blocking probe; the UI supplies the title
-            std::lock_guard<std::mutex> lk(mu_);
-            info_ = ti;
+            std::lock_guard<std::mutex> lk(infoMutex_);
+            info_ = result;
             return;
         }
-        ti.title = std::filesystem::path(path).stem().wstring();  // fallback
+        result.title = std::filesystem::path(path).stem().wstring();  // fallback
         GError* err = nullptr;
-        if (GstDiscoverer* d = gst_discoverer_new(2 * GST_SECOND, &err)) {
-            GstDiscovererInfo* di = gst_discoverer_discover_uri(d, uri, &err);
-            if (di) {
-                if (gst_discoverer_info_get_result(di) == GST_DISCOVERER_OK) {
-                    const gint64 dur = gst_discoverer_info_get_duration(di);
-                    if (dur > 0) ti.durationSec = double(dur) / GST_SECOND;
-                    if (const GstTagList* tags = gst_discoverer_info_get_tags(di)) {
-                        gchar* s = nullptr;
-                        if (gst_tag_list_get_string(tags, GST_TAG_TITLE, &s) && s) { ti.title = fromUtf8(s); g_free(s); }
-                        s = nullptr;
-                        if (gst_tag_list_get_string(tags, GST_TAG_ARTIST, &s) && s) { ti.artist = fromUtf8(s); g_free(s); }
+        if (GstDiscoverer* discoverer = gst_discoverer_new(2 * GST_SECOND, &err)) {
+            GstDiscovererInfo* discovererInfo = gst_discoverer_discover_uri(discoverer, uri, &err);
+            if (discovererInfo) {
+                if (gst_discoverer_info_get_result(discovererInfo) == GST_DISCOVERER_OK) {
+                    const gint64 durationNs = gst_discoverer_info_get_duration(discovererInfo);
+                    if (durationNs > 0) result.durationSec = double(durationNs) / GST_SECOND;
+                    if (const GstTagList* tags = gst_discoverer_info_get_tags(discovererInfo)) {
+                        gchar* tagValue = nullptr;
+                        if (gst_tag_list_get_string(tags, GST_TAG_TITLE, &tagValue) && tagValue) {
+                            result.title = fromUtf8(tagValue);
+                            g_free(tagValue);
+                        }
+                        tagValue = nullptr;
+                        if (gst_tag_list_get_string(tags, GST_TAG_ARTIST, &tagValue) && tagValue) {
+                            result.artist = fromUtf8(tagValue);
+                            g_free(tagValue);
+                        }
                     }
-                    GList* streams = gst_discoverer_info_get_audio_streams(di);
-                    if (streams) {
-                        auto* a = GST_DISCOVERER_AUDIO_INFO(streams->data);
-                        ti.sampleRateHz = int(gst_discoverer_audio_info_get_sample_rate(a));
-                        ti.channels = int(gst_discoverer_audio_info_get_channels(a));
-                        guint br = gst_discoverer_audio_info_get_bitrate(a);
-                        if (!br) br = gst_discoverer_audio_info_get_max_bitrate(a);
-                        ti.bitrateKbps = int(br / 1000);
-                        gst_discoverer_stream_info_list_free(streams);
+                    GList* audioStreams = gst_discoverer_info_get_audio_streams(discovererInfo);
+                    if (audioStreams) {
+                        auto* audioInfo = GST_DISCOVERER_AUDIO_INFO(audioStreams->data);
+                        result.sampleRateHz = int(gst_discoverer_audio_info_get_sample_rate(audioInfo));
+                        result.channels = int(gst_discoverer_audio_info_get_channels(audioInfo));
+                        guint bitrate = gst_discoverer_audio_info_get_bitrate(audioInfo);
+                        if (!bitrate) bitrate = gst_discoverer_audio_info_get_max_bitrate(audioInfo);
+                        result.bitrateKbps = int(bitrate / 1000);
+                        gst_discoverer_stream_info_list_free(audioStreams);
                     }
                 }
-                g_object_unref(di);
+                g_object_unref(discovererInfo);
             }
-            g_object_unref(d);
+            g_object_unref(discoverer);
         }
         if (err) g_error_free(err);
-        if (ti.sampleRateHz > 0) specRate_ = ti.sampleRateHz;
-        std::lock_guard<std::mutex> lk(mu_);
-        info_ = std::move(ti);
+        // Some MP3s (true VBR with no Xing/VBRI header) give GstDiscoverer no bitrate within its
+        // timeout. Fall back to the file's average bitrate from size/duration, like Winamp does.
+        if (result.bitrateKbps <= 0 && result.durationSec > 0) {
+            std::error_code ec;
+            const auto fileBytes = std::filesystem::file_size(path, ec);
+            if (!ec && fileBytes > 0)
+                result.bitrateKbps = int(double(fileBytes) * 8.0 / result.durationSec / 1000.0 + 0.5);
+        }
+        if (result.sampleRateHz > 0) spectrumSampleRateHz_ = result.sampleRateHz;
+        std::lock_guard<std::mutex> lk(infoMutex_);
+        info_ = std::move(result);
     }
 
-    static std::wstring fromUtf8(const char* s) {
-        const int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, nullptr, 0);
-        if (n <= 1) return {};
-        std::wstring w(size_t(n - 1), L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, s, -1, w.data(), n);
-        return w;
+    static std::wstring fromUtf8(const char* utf8) {
+        const int charLen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, nullptr, 0);
+        if (charLen <= 1) return {};
+        std::wstring wide(size_t(charLen - 1), L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide.data(), charLen);
+        return wide;
     }
 
     // Runs on the streaming thread: keep it cheap. Stores the latest spectrum magnitudes (dB).
-    void handleElementMessage(GstMessage* m) {
-        const GstStructure* st = gst_message_get_structure(m);
-        if (!st || !gst_structure_has_name(st, "spectrum")) return;
-        const GValue* list = gst_structure_get_value(st, "magnitude");
-        if (!list || !GST_VALUE_HOLDS_LIST(list)) return;
-        const guint n = std::min<guint>(gst_value_list_get_size(list), kSpecBands);
-        float tmp[kSpecBands];
-        std::fill(std::begin(tmp), std::end(tmp), -80.0f);
-        for (guint i = 0; i < n; ++i) {
-            const GValue* v = gst_value_list_get_value(list, i);
-            if (v && G_VALUE_HOLDS_FLOAT(v)) tmp[i] = g_value_get_float(v);
+    void handleElementMessage(GstMessage* message) {
+        const GstStructure* structure = gst_message_get_structure(message);
+        if (!structure || !gst_structure_has_name(structure, "spectrum")) return;
+        const GValue* magnitudeList = gst_structure_get_value(structure, "magnitude");
+        if (!magnitudeList || !GST_VALUE_HOLDS_LIST(magnitudeList)) return;
+        const guint bandCount = std::min<guint>(gst_value_list_get_size(magnitudeList), kSpectrumBands);
+        float magnitudes[kSpectrumBands];
+        std::fill(std::begin(magnitudes), std::end(magnitudes), -80.0f);
+        for (guint i = 0; i < bandCount; ++i) {
+            const GValue* value = gst_value_list_get_value(magnitudeList, i);
+            if (value && G_VALUE_HOLDS_FLOAT(value)) magnitudes[i] = g_value_get_float(value);
         }
-        SpecFrame f;
-        f.arrived = g_get_monotonic_time();
-        std::copy(std::begin(tmp), std::end(tmp), f.mag);
-        std::lock_guard<std::mutex> lk(specMu_);
-        specQ_.push_back(f);
-        while (specQ_.size() > 64) specQ_.pop_front();
+        SpecFrame frame;
+        frame.arrived = g_get_monotonic_time();
+        std::copy(std::begin(magnitudes), std::end(magnitudes), frame.mag);
+        std::lock_guard<std::mutex> lk(spectrumMutex_);
+        spectrumQueue_.push_back(frame);
+        while (spectrumQueue_.size() > 64) spectrumQueue_.pop_front();
     }
 
     void clearSpectrum() {
-        std::lock_guard<std::mutex> lk(specMu_);
-        specQ_.clear();
+        std::lock_guard<std::mutex> lk(spectrumMutex_);
+        spectrumQueue_.clear();
     }
 
     // Streaming thread: live-radio metadata (ICY StreamTitle arrives as GST_TAG_TITLE).
-    void handleTagMessage(GstMessage* m) {
-        if (!remote_) return;
+    void handleTagMessage(GstMessage* message) {
         GstTagList* tags = nullptr;
-        gst_message_parse_tag(m, &tags);
+        gst_message_parse_tag(message, &tags);
         if (!tags) return;
-        gchar* title = nullptr;
-        gchar* artist = nullptr;
-        gst_tag_list_get_string(tags, GST_TAG_TITLE, &title);
-        gst_tag_list_get_string(tags, GST_TAG_ARTIST, &artist);
         bool changed = false;
-        if (title && *title) {
-            std::lock_guard<std::mutex> lk(mu_);
-            info_.title = fromUtf8(title);
-            info_.artist = artist ? fromUtf8(artist) : std::wstring();
+        if (remote_) {  // ICY StreamTitle arrives as GST_TAG_TITLE on live streams
+            gchar* title = nullptr;
+            gchar* artist = nullptr;
+            gst_tag_list_get_string(tags, GST_TAG_TITLE, &title);
+            gst_tag_list_get_string(tags, GST_TAG_ARTIST, &artist);
+            if (title && *title) {
+                std::lock_guard<std::mutex> lk(infoMutex_);
+                info_.title = fromUtf8(title);
+                info_.artist = artist ? fromUtf8(artist) : std::wstring();
+                changed = true;
+            }
+            g_free(title);
+            g_free(artist);
+        }
+        // The stream's own parser (mpegaudioparse, etc.) posts this for local files and for
+        // live radio alike; it's the only bitrate source at all for a live stream, since
+        // discover() skips GstDiscoverer for those.
+        guint bitrate = 0;
+        if ((gst_tag_list_get_uint(tags, GST_TAG_BITRATE, &bitrate) ||
+             gst_tag_list_get_uint(tags, GST_TAG_NOMINAL_BITRATE, &bitrate)) &&
+            bitrate > 0) {
+            std::lock_guard<std::mutex> lk(infoMutex_);
+            info_.bitrateKbps = int(bitrate / 1000);
             changed = true;
         }
-        g_free(title);
-        g_free(artist);
         gst_tag_list_unref(tags);
         if (changed) notify(EngineEvent::StreamTags);
     }
 
-    void setState(EngineState s) {
-        state_ = s;
-        notify(EngineEvent::StateChanged, static_cast<LPARAM>(s));
+    void setState(EngineState newState) {
+        state_ = newState;
+        notify(EngineEvent::StateChanged, static_cast<LPARAM>(newState));
     }
-    void notify(EngineEvent e, LPARAM l = 0) {
-        if (HWND h = hwnd_.load()) PostMessageW(h, msg_, static_cast<WPARAM>(e), l);
+    void notify(EngineEvent event, LPARAM param = 0) {
+        if (HWND window = hwnd_.load()) PostMessageW(window, msg_, static_cast<WPARAM>(event), param);
     }
     void applyEq() {
-        if (!eq_) return;
+        if (!equalizer_) return;
         for (int i = 0; i < 10; ++i) {
-            const float g = eqOn_ ? std::clamp(bands_[i] + preamp_, -24.0f, 12.0f) : 0.0f;
-            char name[16];
-            g_snprintf(name, sizeof name, "band%d", i);
-            g_object_set(eq_, name, double(g), nullptr);
+            const float gainDb = eqOn_ ? std::clamp(bands_[i] + preamp_, -24.0f, 12.0f) : 0.0f;
+            char propertyName[16];
+            g_snprintf(propertyName, sizeof propertyName, "band%d", i);
+            g_object_set(equalizer_, propertyName, double(gainDb), nullptr);
         }
     }
 
     // Streaming thread: swap in the queued URI for gapless playback.
-    static void onAboutToFinish(GstElement* pb, gpointer self) {
-        auto* e = static_cast<GStreamerEngine*>(self);
-        std::string next;
+    static void onAboutToFinish(GstElement* playbin, gpointer self) {
+        auto* engine = static_cast<GStreamerEngine*>(self);
+        std::string nextUri;
         {
-            std::lock_guard<std::mutex> lk(e->mu_);
-            next.swap(e->nextUri_);
+            std::lock_guard<std::mutex> lk(engine->infoMutex_);
+            nextUri.swap(engine->nextUri_);
         }
-        if (!next.empty()) {
-            g_object_set(pb, "uri", next.c_str(), nullptr);
-            e->notify(EngineEvent::TagsReady);  // UI learns the track changed
+        if (!nextUri.empty()) {
+            g_object_set(playbin, "uri", nextUri.c_str(), nullptr);
+            engine->notify(EngineEvent::TagsReady);  // UI learns the track changed
         }
     }
 
-    static GstBusSyncReply onBusSync(GstBus*, GstMessage* m, gpointer self) {
-        auto* e = static_cast<GStreamerEngine*>(self);
-        switch (GST_MESSAGE_TYPE(m)) {
+    // Streaming thread: fires whenever the audio-filter's input caps (re)negotiate.
+    static GstPadProbeReturn onCapsProbe(GstPad*, GstPadProbeInfo* probeInfo, gpointer self) {
+        GstEvent* event = GST_PAD_PROBE_INFO_EVENT(probeInfo);
+        if (GST_EVENT_TYPE(event) == GST_EVENT_CAPS) {
+            GstCaps* caps = nullptr;
+            gst_event_parse_caps(event, &caps);
+            gint rate = 0;
+            if (caps && gst_caps_get_size(caps) > 0 &&
+                gst_structure_get_int(gst_caps_get_structure(caps, 0), "rate", &rate) && rate > 0) {
+                auto* engine = static_cast<GStreamerEngine*>(self);
+                {
+                    std::lock_guard<std::mutex> lk(engine->infoMutex_);
+                    engine->info_.sampleRateHz = rate;
+                }
+                engine->spectrumSampleRateHz_ = rate;
+                engine->notify(EngineEvent::StreamTags);
+            }
+        }
+        return GST_PAD_PROBE_OK;
+    }
+
+    static GstBusSyncReply onBusSync(GstBus*, GstMessage* message, gpointer self) {
+        auto* engine = static_cast<GStreamerEngine*>(self);
+        switch (GST_MESSAGE_TYPE(message)) {
             case GST_MESSAGE_EOS:
-                e->eos_ = true;
-                e->state_ = EngineState::Stopped;
-                e->notify(EngineEvent::EndOfStream);
+                engine->eos_ = true;
+                engine->state_ = EngineState::Stopped;
+                engine->notify(EngineEvent::EndOfStream);
                 break;
             case GST_MESSAGE_TAG:
-                e->handleTagMessage(m);
+                engine->handleTagMessage(message);
                 break;
             case GST_MESSAGE_ELEMENT:
-                e->handleElementMessage(m);
+                engine->handleElementMessage(message);
                 break;
             case GST_MESSAGE_ERROR:
-                e->state_ = EngineState::Stopped;
-                e->notify(EngineEvent::Error);
+                engine->state_ = EngineState::Stopped;
+                engine->notify(EngineEvent::Error);
                 break;
             default: break;
         }
@@ -388,20 +447,21 @@ private:
     }
 
     GstElement* playbin_ = nullptr;
-    GstElement* eq_ = nullptr;
-    GstElement* pan_ = nullptr;
+    GstElement* equalizer_ = nullptr;
+    GstElement* panorama_ = nullptr;
+    GstElement* spectrumElement_ = nullptr;
     std::atomic<HWND> hwnd_{nullptr};
     UINT msg_ = WM_APP_ENGINE;
     std::atomic<EngineState> state_{EngineState::Stopped};
     std::atomic<bool> eos_{false};
-    static constexpr int kSpecBands = 64;
-    std::mutex specMu_;
-    static constexpr gint64 kSpecDelayUs = 150000;  // tune if bars lead/lag the sound
-    struct SpecFrame { gint64 arrived = 0; float mag[kSpecBands] = {}; };
-    std::deque<SpecFrame> specQ_;
+    static constexpr int kSpectrumBands = 64;
+    std::mutex spectrumMutex_;
+    static constexpr gint64 kSpectrumDelayUs = 150000;  // tune if bars lead/lag the sound
+    struct SpecFrame { gint64 arrived = 0; float mag[kSpectrumBands] = {}; };
+    std::deque<SpecFrame> spectrumQueue_;
     std::atomic<bool> remote_{false};
-    int specRate_ = 44100;  // used only to place the bars; spectrum is linear over 0..Nyquist
-    std::mutex mu_;
+    int spectrumSampleRateHz_ = 44100;  // used only to place the bars; spectrum is linear over 0..Nyquist
+    std::mutex infoMutex_;
     std::string nextUri_;
     TrackInfo info_;
     bool eqOn_ = true;
@@ -412,7 +472,7 @@ private:
 }  // namespace
 
 std::unique_ptr<IEngine> createGStreamerEngine() {
-    auto e = std::make_unique<GStreamerEngine>();
-    if (!e->init()) return nullptr;
-    return e;
+    auto engine = std::make_unique<GStreamerEngine>();
+    if (!engine->init()) return nullptr;
+    return engine;
 }

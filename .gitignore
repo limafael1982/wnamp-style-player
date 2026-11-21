@@ -11,3 +11,4 @@ wnamp_net.log
 *.suo
 .vscode/
 __pycache__/
+.git-rewrite/

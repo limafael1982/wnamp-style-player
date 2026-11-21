@@ -32,8 +32,9 @@ void RadioMenu::show(HWND owner) {
         for (size_t i = 0; i < somaChannels_.size(); ++i) {
             std::wstring label = somaChannels_[i].title;
             if (!somaChannels_[i].genre.empty()) label += L"  (" + somaChannels_[i].genre + L")";
-            for (size_t k = label.find(L'&'); k != std::wstring::npos; k = label.find(L'&', k + 2))
-                label.insert(k, 1, L'&');
+            for (size_t ampersandPos = label.find(L'&'); ampersandPos != std::wstring::npos;
+                 ampersandPos = label.find(L'&', ampersandPos + 2))
+                label.insert(ampersandPos, 1, L'&');
             AppendMenuW(soma, MF_STRING | ((i && i % 25 == 0) ? MF_MENUBARBREAK : 0),
                         UINT(kCmdSomaBase + i), label.c_str());
         }
@@ -58,8 +59,8 @@ void RadioMenu::onCommand(UINT cmd) {
     } else if (cmd >= kCmdSomaBase && cmd - kCmdSomaBase < somaChannels_.size()) {
         selectSoma(somaChannels_[cmd - kCmdSomaBase]);
     } else if (cmd >= kCmdBuiltinBase && cmd - kCmdBuiltinBase < builtins.size()) {
-        const radio::Station& st = builtins[cmd - kCmdBuiltinBase];
-        onSelect_(st.url, st.title);
+        const radio::Station& station = builtins[cmd - kCmdBuiltinBase];
+        onSelect_(station.url, station.title);
     }
 }
 

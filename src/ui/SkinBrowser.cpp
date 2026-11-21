@@ -35,11 +35,11 @@ struct State {
 
 std::unique_ptr<State> g_state;
 
-int S(const State& st, int v) { return MulDiv(v, static_cast<int>(st.dpi), 96); }
+int scaled(const State& st, int value) { return MulDiv(value, static_cast<int>(st.dpi), 96); }
 
-std::wstring lowerStr(std::wstring s) {
-    for (auto& c : s) c = static_cast<wchar_t>(std::towlower(c));
-    return s;
+std::wstring lowerStr(std::wstring text) {
+    for (auto& ch : text) ch = static_cast<wchar_t>(std::towlower(ch));
+    return text;
 }
 
 void loadPreview(State& st, int index) {
@@ -84,7 +84,7 @@ void applyFont(State& st) {
 void layout(State& st) {
     RECT rc;
     GetClientRect(st.hwnd, &rc);
-    const int m = S(st, 8), btnW = S(st, 84), btnH = S(st, 26), listW = S(st, 210);
+    const int m = scaled(st, 8), btnW = scaled(st, 84), btnH = scaled(st, 26), listW = scaled(st, 210);
     const int btnY = rc.bottom - m - btnH;
     MoveWindow(st.list, m, m, listW, std::max(1, int(btnY - 2 * m)), TRUE);
     MoveWindow(st.close, rc.right - m - btnW, btnY, btnW, btnH, TRUE);
@@ -128,13 +128,13 @@ void paintPreview(State& st, HDC dc) {
         std::wstring msg = st.previewErr;
         if (msg.empty()) {
             msg = L"No skins found.\nPut .wsz files or unpacked skin folders in:\n";
-            for (const auto& d : st.dirs) msg += L"\n" + d;
+            for (const auto& dir : st.dirs) msg += L"\n" + dir;
         }
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(220, 220, 220));
         HGDIOBJ old = SelectObject(dc, st.font);
         RECT t = r;
-        InflateRect(&t, -S(st, 8), -S(st, 8));
+        InflateRect(&t, -scaled(st, 8), -scaled(st, 8));
         DrawTextW(dc, msg.c_str(), -1, &t, DT_CENTER | DT_VCENTER | DT_WORDBREAK | DT_NOPREFIX);
         SelectObject(dc, old);
         return;
@@ -183,8 +183,8 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         case WM_GETMINMAXINFO: {
             if (!st) break;
             auto* mm = reinterpret_cast<MINMAXINFO*>(l);
-            mm->ptMinTrackSize.x = S(*st, 520);
-            mm->ptMinTrackSize.y = S(*st, 300);
+            mm->ptMinTrackSize.x = scaled(*st, 520);
+            mm->ptMinTrackSize.y = scaled(*st, 300);
             return 0;
         }
         case WM_DPICHANGED: {

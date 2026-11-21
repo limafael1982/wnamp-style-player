@@ -11,42 +11,45 @@
 
 namespace {
 
-std::wstring lowerW(std::wstring s) {
-    for (auto& c : s) c = static_cast<wchar_t>(std::towlower(c));
-    return s;
+std::wstring lowerW(std::wstring text) {
+    for (auto& ch : text) ch = static_cast<wchar_t>(std::towlower(ch));
+    return text;
 }
 
-std::wstring utf8ToWide(const std::string& s, bool* valid = nullptr) {
+std::wstring utf8ToWide(const std::string& narrow, bool* valid = nullptr) {
     if (valid) *valid = true;
-    if (s.empty()) return {};
-    int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), static_cast<int>(s.size()), nullptr, 0);
-    UINT cp = CP_UTF8;
+    if (narrow.empty()) return {};
+    int wideLen =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, narrow.data(), static_cast<int>(narrow.size()), nullptr, 0);
+    UINT codePage = CP_UTF8;
     DWORD flags = MB_ERR_INVALID_CHARS;
-    if (n == 0) {  // not valid UTF-8: old .m3u files use the ANSI code page
+    if (wideLen == 0) {  // not valid UTF-8: old .m3u files use the ANSI code page
         if (valid) *valid = false;
-        cp = CP_ACP;
+        codePage = CP_ACP;
         flags = 0;
-        n = MultiByteToWideChar(cp, flags, s.data(), static_cast<int>(s.size()), nullptr, 0);
-        if (n == 0) return {};
+        wideLen = MultiByteToWideChar(codePage, flags, narrow.data(), static_cast<int>(narrow.size()), nullptr, 0);
+        if (wideLen == 0) return {};
     }
-    std::wstring w(static_cast<size_t>(n), L'\0');
-    MultiByteToWideChar(cp, flags, s.data(), static_cast<int>(s.size()), w.data(), n);
-    return w;
+    std::wstring wide(static_cast<size_t>(wideLen), L'\0');
+    MultiByteToWideChar(codePage, flags, narrow.data(), static_cast<int>(narrow.size()), wide.data(), wideLen);
+    return wide;
 }
 
-std::string wideToUtf8(const std::wstring& w) {
-    if (w.empty()) return {};
-    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
-    std::string s(static_cast<size_t>(n), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), s.data(), n, nullptr, nullptr);
-    return s;
+std::string wideToUtf8(const std::wstring& wide) {
+    if (wide.empty()) return {};
+    const int byteLen =
+        WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr);
+    std::string narrow(static_cast<size_t>(byteLen), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), narrow.data(), byteLen, nullptr,
+                         nullptr);
+    return narrow;
 }
 
-std::wstring trim(const std::wstring& s) {
-    const size_t a = s.find_first_not_of(L" \t\r\n");
-    if (a == std::wstring::npos) return {};
-    const size_t b = s.find_last_not_of(L" \t\r\n");
-    return s.substr(a, b - a + 1);
+std::wstring trim(const std::wstring& text) {
+    const size_t first = text.find_first_not_of(L" \t\r\n");
+    if (first == std::wstring::npos) return {};
+    const size_t last = text.find_last_not_of(L" \t\r\n");
+    return text.substr(first, last - first + 1);
 }
 
 std::vector<std::wstring> splitLines(const std::wstring& text) {
@@ -62,9 +65,9 @@ std::vector<std::wstring> splitLines(const std::wstring& text) {
 }
 
 bool readFile(const std::wstring& path, std::string& out) {
-    std::ifstream f(std::filesystem::path(path), std::ios::binary);
-    if (!f) return false;
-    out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+    std::ifstream file(std::filesystem::path(path), std::ios::binary);
+    if (!file) return false;
+    out.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     if (out.size() >= 3 && static_cast<unsigned char>(out[0]) == 0xEF &&
         static_cast<unsigned char>(out[1]) == 0xBB && static_cast<unsigned char>(out[2]) == 0xBF)
         out.erase(0, 3);  // UTF-8 BOM
@@ -74,12 +77,12 @@ bool readFile(const std::wstring& path, std::string& out) {
 // Resolves an entry against the playlist's folder unless it is absolute or a URL.
 std::wstring resolveEntry(const std::wstring& entry, const std::filesystem::path& baseDir) {
     if (entry.find(L"://") != std::wstring::npos) return entry;  // stream URL
-    std::wstring e = entry;
-    std::replace(e.begin(), e.end(), L'/', L'\\');
-    std::filesystem::path p(e);
-    if (p.is_absolute()) return p.wstring();
-    if (p.has_root_name() || p.has_root_directory()) return p.wstring();  // e.g. "\music\a.mp3"
-    return (baseDir / p).lexically_normal().wstring();
+    std::wstring normalized = entry;
+    std::replace(normalized.begin(), normalized.end(), L'/', L'\\');
+    std::filesystem::path entryPath(normalized);
+    if (entryPath.is_absolute()) return entryPath.wstring();
+    if (entryPath.has_root_name() || entryPath.has_root_directory()) return entryPath.wstring();  // e.g. "\music\a.mp3"
+    return (baseDir / entryPath).lexically_normal().wstring();
 }
 
 void parseM3u(const std::wstring& text, const std::filesystem::path& baseDir, std::vector<std::wstring>& out) {
@@ -90,24 +93,24 @@ void parseM3u(const std::wstring& text, const std::filesystem::path& baseDir, st
 }
 
 void parsePls(const std::wstring& text, const std::filesystem::path& baseDir, std::vector<std::wstring>& out) {
-    std::map<int, std::wstring> files;  // ordered by entry number
+    std::map<int, std::wstring> filesByIndex;  // ordered by entry number
     for (const auto& line : splitLines(text)) {
-        const size_t eq = line.find(L'=');
-        if (eq == std::wstring::npos) continue;
-        const std::wstring key = lowerW(trim(line.substr(0, eq)));
+        const size_t eqPos = line.find(L'=');
+        if (eqPos == std::wstring::npos) continue;
+        const std::wstring key = lowerW(trim(line.substr(0, eqPos)));
         if (key.size() <= 4 || key.compare(0, 4, L"file") != 0) continue;
-        int num = 0;
-        bool ok = true;
+        int entryNumber = 0;
+        bool validNumber = true;
         for (size_t i = 4; i < key.size(); ++i) {
-            if (key[i] < L'0' || key[i] > L'9') { ok = false; break; }
-            num = num * 10 + (key[i] - L'0');
-            if (num > 1000000) { ok = false; break; }
+            if (key[i] < L'0' || key[i] > L'9') { validNumber = false; break; }
+            entryNumber = entryNumber * 10 + (key[i] - L'0');
+            if (entryNumber > 1000000) { validNumber = false; break; }
         }
-        if (!ok) continue;
-        const std::wstring value = trim(line.substr(eq + 1));
-        if (!value.empty()) files[num] = resolveEntry(value, baseDir);
+        if (!validNumber) continue;
+        const std::wstring value = trim(line.substr(eqPos + 1));
+        if (!value.empty()) filesByIndex[entryNumber] = resolveEntry(value, baseDir);
     }
-    for (auto& kv : files) out.push_back(std::move(kv.second));
+    for (auto& entry : filesByIndex) out.push_back(std::move(entry.second));
 }
 
 bool isPls(const std::wstring& path) {
@@ -126,31 +129,33 @@ bool loadPlaylistFile(const std::wstring& path, std::vector<std::wstring>& outPa
     return true;
 }
 
-bool savePlaylistFile(const std::wstring& path, const Playlist& pl) {
+bool savePlaylistFile(const std::wstring& path, const Playlist& playlist) {
     std::string out;
-    const size_t n = pl.size();
+    const size_t count = playlist.size();
     if (isPls(path)) {
         out += "[playlist]\r\n";
-        for (size_t i = 0; i < n; ++i) {
-            const PlaylistEntry& e = pl.at(i);
-            const std::string idx = std::to_string(i + 1);
-            out += "File" + idx + "=" + wideToUtf8(e.path) + "\r\n";
-            out += "Title" + idx + "=" + wideToUtf8(e.title) + "\r\n";
-            out += "Length" + idx + "=" + std::to_string(e.durationSec >= 0 ? static_cast<long long>(e.durationSec + 0.5) : -1LL) + "\r\n";
+        for (size_t i = 0; i < count; ++i) {
+            const PlaylistEntry& entry = playlist.at(i);
+            const std::string entryIndex = std::to_string(i + 1);
+            out += "File" + entryIndex + "=" + wideToUtf8(entry.path) + "\r\n";
+            out += "Title" + entryIndex + "=" + wideToUtf8(entry.title) + "\r\n";
+            out += "Length" + entryIndex + "=" +
+                   std::to_string(entry.durationSec >= 0 ? static_cast<long long>(entry.durationSec + 0.5) : -1LL) +
+                   "\r\n";
         }
-        out += "NumberOfEntries=" + std::to_string(n) + "\r\nVersion=2\r\n";
+        out += "NumberOfEntries=" + std::to_string(count) + "\r\nVersion=2\r\n";
     } else {
         out += "#EXTM3U\r\n";
-        for (size_t i = 0; i < n; ++i) {
-            const PlaylistEntry& e = pl.at(i);
-            if (e.durationSec >= 0)
-                out += "#EXTINF:" + std::to_string(static_cast<long long>(e.durationSec + 0.5)) + "," +
-                       wideToUtf8(e.title) + "\r\n";
-            out += wideToUtf8(e.path) + "\r\n";
+        for (size_t i = 0; i < count; ++i) {
+            const PlaylistEntry& entry = playlist.at(i);
+            if (entry.durationSec >= 0)
+                out += "#EXTINF:" + std::to_string(static_cast<long long>(entry.durationSec + 0.5)) + "," +
+                       wideToUtf8(entry.title) + "\r\n";
+            out += wideToUtf8(entry.path) + "\r\n";
         }
     }
-    std::ofstream f(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
-    if (!f) return false;
-    f.write(out.data(), static_cast<std::streamsize>(out.size()));
-    return static_cast<bool>(f);
+    std::ofstream file(std::filesystem::path(path), std::ios::binary | std::ios::trunc);
+    if (!file) return false;
+    file.write(out.data(), static_cast<std::streamsize>(out.size()));
+    return static_cast<bool>(file);
 }
