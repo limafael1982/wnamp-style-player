@@ -1,0 +1,13 @@
+build/
+out/
+.vs/
+CMakeUserPresets.json
+*.wsz
+!data/default.wsz
+local.config.ps1
+build.log
+wnamp_net.log
+*.user
+*.suo
+.vscode/
+__pycache__/
