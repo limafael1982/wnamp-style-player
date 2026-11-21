@@ -72,8 +72,6 @@ add_executable(wnamp WIN32
   src/playlist/PlaylistIo.cpp
   src/settings/Settings.h
   src/settings/Settings.cpp
-  src/ui/SkinBrowser.h
-  src/ui/SkinBrowser.cpp
   src/ui/SettingsWindow.h
   src/ui/SettingsWindow.cpp
   src/net/Http.h

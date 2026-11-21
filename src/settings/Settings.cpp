@@ -206,6 +206,13 @@ std::wstring Settings::exeDir() {
     return slash == std::wstring::npos ? std::wstring() : buf.substr(0, slash);
 }
 
+std::wstring Settings::userSkinsDir() {
+    const std::wstring cfg = configDir();
+    if (cfg.empty()) return {};
+    const std::wstring dir = joinPath(cfg, L"Skins");
+    return ensureDir(dir) ? dir : std::wstring();
+}
+
 std::vector<std::wstring> Settings::skinDirs() {
     std::vector<std::wstring> dirs;
     const std::wstring exe = exeDir();
@@ -213,11 +220,8 @@ std::vector<std::wstring> Settings::skinDirs() {
         const std::wstring exeSkins = joinPath(exe, L"skins");
         if (ensureDir(exeSkins)) dirs.push_back(exeSkins);
     }
-    const std::wstring cfg = configDir();
-    if (!cfg.empty()) {
-        const std::wstring cfgSkins = joinPath(cfg, L"Skins");
-        if (ensureDir(cfgSkins)) dirs.push_back(cfgSkins);
-    }
+    const std::wstring userDir = userSkinsDir();
+    if (!userDir.empty()) dirs.push_back(userDir);
     return dirs;
 }
 

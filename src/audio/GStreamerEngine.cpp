@@ -59,26 +59,32 @@ public:
         // equalizer-10bands ! audiopanorama ! spectrum (spectrum feeds the visualizer later)
         GError* err = nullptr;
         GstElement* filter = gst_parse_bin_from_description(
-            "audioconvert ! equalizer-10bands name=eq ! audiopanorama name=pan ! "
+            "audioconvert name=conv ! equalizer-10bands name=eq ! audiopanorama name=pan ! "
             "spectrum name=spec bands=64 threshold=-80 interval=25000000 "
             "post-messages=true message-magnitude=true",
             TRUE, &err);
         if (err) g_error_free(err);
+        GstElement* audioConvert = nullptr;
         if (filter) {
+            audioConvert = gst_bin_get_by_name(GST_BIN(filter), "conv");
             equalizer_ = gst_bin_get_by_name(GST_BIN(filter), "eq");
             panorama_ = gst_bin_get_by_name(GST_BIN(filter), "pan");
             spectrumElement_ = gst_bin_get_by_name(GST_BIN(filter), "spec");
             g_object_set(playbin_, "audio-filter", filter, nullptr);
         }
-        if (spectrumElement_) {
-            // The negotiated caps give the real sample rate for every source, local files
-            // included, and are the only way to learn it for a live radio stream (where
-            // discover() below deliberately skips the blocking GstDiscoverer probe).
-            if (GstPad* pad = gst_element_get_static_pad(spectrumElement_, "sink")) {
+        if (audioConvert) {
+            // Probed on audioconvert's own sink pad — the first stage of the filter chain —
+            // so this sees the source's real sample rate and channel count before
+            // audiopanorama can widen a mono source to stereo for its panning effect (which
+            // would otherwise make the skin's mono/stereo indicator always show stereo).
+            // This is also the only way to learn either for a live radio stream, where
+            // discover() below deliberately skips the blocking GstDiscoverer probe.
+            if (GstPad* pad = gst_element_get_static_pad(audioConvert, "sink")) {
                 gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, &GStreamerEngine::onCapsProbe, this,
                                    nullptr);
                 gst_object_unref(pad);
             }
+            gst_object_unref(audioConvert);  // not kept like eq/pan/spec: only its pad was needed
         }
 
         g_signal_connect(playbin_, "about-to-finish", G_CALLBACK(&GStreamerEngine::onAboutToFinish), this);
@@ -402,22 +408,29 @@ private:
         }
     }
 
-    // Streaming thread: fires whenever the audio-filter's input caps (re)negotiate.
+    // Streaming thread: fires whenever the probed pad's input caps (re)negotiate. See the
+    // comment at the call site in init() for why this is attached to audioconvert's sink pad
+    // rather than further down the filter chain.
     static GstPadProbeReturn onCapsProbe(GstPad*, GstPadProbeInfo* probeInfo, gpointer self) {
         GstEvent* event = GST_PAD_PROBE_INFO_EVENT(probeInfo);
         if (GST_EVENT_TYPE(event) == GST_EVENT_CAPS) {
             GstCaps* caps = nullptr;
             gst_event_parse_caps(event, &caps);
-            gint rate = 0;
-            if (caps && gst_caps_get_size(caps) > 0 &&
-                gst_structure_get_int(gst_caps_get_structure(caps, 0), "rate", &rate) && rate > 0) {
-                auto* engine = static_cast<GStreamerEngine*>(self);
-                {
-                    std::lock_guard<std::mutex> lk(engine->infoMutex_);
-                    engine->info_.sampleRateHz = rate;
+            if (caps && gst_caps_get_size(caps) > 0) {
+                const GstStructure* structure = gst_caps_get_structure(caps, 0);
+                gint rate = 0, channels = 0;
+                const bool gotRate = gst_structure_get_int(structure, "rate", &rate) && rate > 0;
+                const bool gotChannels = gst_structure_get_int(structure, "channels", &channels) && channels > 0;
+                if (gotRate || gotChannels) {
+                    auto* engine = static_cast<GStreamerEngine*>(self);
+                    {
+                        std::lock_guard<std::mutex> lk(engine->infoMutex_);
+                        if (gotRate) engine->info_.sampleRateHz = rate;
+                        if (gotChannels) engine->info_.channels = channels;
+                    }
+                    if (gotRate) engine->spectrumSampleRateHz_ = rate;
+                    engine->notify(EngineEvent::StreamTags);
                 }
-                engine->spectrumSampleRateHz_ = rate;
-                engine->notify(EngineEvent::StreamTags);
             }
         }
         return GST_PAD_PROBE_OK;

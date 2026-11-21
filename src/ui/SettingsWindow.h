@@ -18,16 +18,20 @@
 // on-disk format.
 class SettingsWindow {
 public:
-    using VoidAction = std::function<void()>;
     using StringGetter = std::function<std::wstring()>;
     using BoolGetter = std::function<bool()>;
     using BoolSetter = std::function<void(bool)>;
     using StationsGetter = std::function<std::vector<radio::Station>()>;
     using StationsSetter = std::function<void(const std::vector<radio::Station>&)>;
+    using SkinDirsGetter = std::function<std::vector<std::wstring>()>;
+    using SkinApplier = std::function<void(const std::wstring&)>;
+    using SkinImporter = std::function<bool(const std::wstring& sourcePath, std::wstring& err)>;
 
     struct Callbacks {
-        StringGetter currentSkinName;  // display only, e.g. the current skin's file name
-        VoidAction openSkinBrowser;    // opens the existing Skin Browser window
+        StringGetter currentSkinPath;  // full path of the applied skin, for display + list highlight
+        SkinDirsGetter getSkinDirs;    // folders to scan for skins (Settings::skinDirs())
+        SkinApplier applySkin;         // applies the chosen skin file/folder path immediately
+        SkinImporter importSkin;       // copies a file picked via Browse... into the skins folder and applies it
 
         BoolGetter getShowTrayIcon;
         BoolSetter setShowTrayIcon;

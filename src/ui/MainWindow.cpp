@@ -3,7 +3,6 @@
 #include "playlist/PlaylistIo.h"
 #include "radio/Stations.h"
 #include "ui/SettingsWindow.h"
-#include "ui/SkinBrowser.h"
 #include "net/SomaFm.h"
 
 #include <commdlg.h>
@@ -202,6 +201,11 @@ bool MainWindow::loadSkin(const std::wstring& path, std::wstring& err) {
     if (plWin_) plWin_->setSkin(skin_);
     applyRegion();
     render();
+    // Persist the choice right away rather than waiting for a clean exit: settings were
+    // previously only written from WM_DESTROY, so a skin picked while "keep running in the
+    // background" is on (window hidden, not destroyed), or lost to a crash or force-kill,
+    // would silently revert to the old one on the next launch.
+    saveSettings();
     return true;
 }
 
@@ -964,21 +968,30 @@ void MainWindow::toggleEq() {
     render();
 }
 
-void MainWindow::openSkinBrowser() {
-    SkinBrowser::show(hwnd_, hinst_, Settings::skinDirs(), skinPath_, [this](const std::wstring& path) {
+void MainWindow::openSettingsWindow() {
+    SettingsWindow::Callbacks cb;
+    cb.currentSkinPath = [this] { return skinPath_; };
+    cb.getSkinDirs = [] { return Settings::skinDirs(); };
+    cb.applySkin = [this](const std::wstring& path) {
         std::wstring err;
         if (!loadSkin(path, err))
             MessageBoxW(hwnd_, err.c_str(), L"Could not load skin", MB_OK | MB_ICONWARNING);
-    });
-}
-
-void MainWindow::openSettingsWindow() {
-    SettingsWindow::Callbacks cb;
-    cb.currentSkinName = [this] {
-        const size_t slash = skinPath_.find_last_of(L"\\/");
-        return slash == std::wstring::npos ? skinPath_ : skinPath_.substr(slash + 1);
     };
-    cb.openSkinBrowser = [this] { openSkinBrowser(); };
+    cb.importSkin = [this](const std::wstring& sourcePath, std::wstring& err) {
+        const std::wstring destDir = Settings::userSkinsDir();
+        if (destDir.empty()) {
+            err = L"Could not find a writable folder to copy the skin into.";
+            return false;
+        }
+        const size_t slash = sourcePath.find_last_of(L"\\/");
+        const std::wstring fileName = slash == std::wstring::npos ? sourcePath : sourcePath.substr(slash + 1);
+        const std::wstring destPath = destDir + L"\\" + fileName;
+        if (!CopyFileW(sourcePath.c_str(), destPath.c_str(), FALSE)) {
+            err = L"Could not copy the skin file into the skins folder.";
+            return false;
+        }
+        return loadSkin(destPath, err);
+    };
     cb.getShowTrayIcon = [this] { return settings_->data.showTrayIcon; };
     cb.setShowTrayIcon = [this](bool on) { settings_->data.showTrayIcon = on; updateTrayIcon(); };
     cb.getKeepRunningInBackground = [this] { return settings_->data.keepRunningInBackground; };

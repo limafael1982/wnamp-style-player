@@ -39,6 +39,7 @@ public:
     static std::wstring configDir();                 // %APPDATA%\wnamp (created on demand)
     static std::wstring exeDir();                    // folder containing the running exe
     static std::vector<std::wstring> skinDirs();     // {exeDir\skins, configDir\Skins} that exist / could be created
+    static std::wstring userSkinsDir();              // configDir\Skins: writable, where Settings' Browse... copies skins
     static std::wstring playlistPath();              // configDir\playlist.m3u8
 
     bool load();         // false if there is no settings file yet; unspecified keys keep their current value

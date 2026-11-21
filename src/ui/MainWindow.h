@@ -93,7 +93,6 @@ private:
     void showTrayContextMenu();
     void runAsync(std::function<void()> work, std::function<void()> done);
     void playUrl(const std::wstring& url, const std::wstring& title);
-    void openSkinBrowser();
     void setVolumeUi(float v);
     bool onKey(WPARAM vk, bool alt);
     void savePlaylist();
